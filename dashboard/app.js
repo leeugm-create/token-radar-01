@@ -79,7 +79,10 @@
       DATA.odds.protocols_n + ' protocols, ' + fmtShare(DATA.odds.global_rate) + ' already record a token. A row\u2019s odds are ' +
       'the token share of its own category, smoothed toward that market share, tilted by its age cohort\u2019s share. ' +
       'That is a cross-sectional share at one moment \u2014 what fraction of its peers have a token \u2014 not a prediction ' +
-      'that this protocol will launch. <b>Expected value</b> is the two figures multiplied, and the board can be sorted by it.</p>' +
+      'that this protocol will launch. <b>Expected value</b> is the two figures multiplied, and the board can be sorted by it. ' +
+      'Each farm plan ends in a verdict summed from the plan\u2019s own stated times and gas, at a stated farmer capture of ' +
+      (DATA.farm_capture * 100).toFixed(2) + '% of a launch\u2019s implied value \u2014 the position\u2019s capital is the farmer\u2019s ' +
+      'to keep and is never counted as a cost.</p>' +
       '<span class="formula">expected = implied \u00d7 launch odds</span></section>';
   }
   function validationPanel() {
@@ -230,6 +233,17 @@
       '<tr><td>80% held-out range (where comparable launches actually landed)</td><td>' + fmtFull(r.implied_low_usd) + ' \u2013 ' + fmtFull(r.implied_high_usd) + '</td></tr>' +
       '<tr><td>Launch odds (peers\u2019 record: category token share, age-tilted)</td><td>' + fmtOdds(r.launch_odds) + '</td></tr>' +
       '<tr class="total"><td>Expected value (implied \u00d7 odds)</td><td>' + fmtFull(r.expected_value_usd) + '</td></tr></tbody></table>';
+    var barWord = r.implied_value_usd >= r.farm_breakeven_usd * 3 ? 'clears its bar by a wide margin'
+      : r.implied_value_usd >= r.farm_breakeven_usd ? 'clears its bar' : 'does not clear its bar at these odds';
+    var verdict = '<div class="verdict"><div class="mults">' +
+      '<span><b>' + r.farm_hours + ' h</b> of work</span>' +
+      '<span>sunk cost <b>' + (r.farm_sunk_cost_usd < 10 ? '$' + r.farm_sunk_cost_usd.toFixed(2) : fmtUsd(r.farm_sunk_cost_usd)) + '</b></span>' +
+      '<span>capital kept <b>' + fmtUsd(r.farm_capital_usd) + '</b></span>' +
+      '<span>break-even launch <b>' + fmtUsd(r.farm_breakeven_usd) + '</b></span>' +
+      '<span>expected capture <b>' + fmtUsd(r.farm_ev_usd) + '</b></span>' +
+      '<span><b>' + fmtUsd(r.farm_ev_per_hour) + '</b> per hour expected</span></div>' +
+      '<p>The implied value ' + barWord + '. The likeliest single outcome is still no launch at all: ' +
+      'the position stays yours to withdraw, and only the sunk cost is gone.</p></div>';
     var plan = '<ol class="plan">' + r.farm_steps.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ol>';
     app.innerHTML = masthead() +
       '<div class="detail"><button class="back" id="back">\u2190 Back to the board</button>' +
@@ -243,7 +257,7 @@
       '<div class="card"><div class="k">Age with no token</div><div class="v">' + fmtAge(r.age_days) + '</div><div class="s">since ' + esc(r.listed_at || 'unknown') + '</div></div>' +
       '</div>' +
       '<h3>The model, on this protocol</h3>' + breakdown +
-      '<h3>Farm plan — before any token</h3>' + plan +
+      '<h3>Farm plan — before any token</h3>' + verdict + plan +
       '<div class="navrow"><button id="prev"' + (prev ? '' : ' disabled') + '>\u2190 #' + (r.rank - 1) + ' ' + (prev ? esc(prev.name) : '') + '</button>' +
       '<button id="next"' + (next ? '' : ' disabled') + '>' + (next ? esc(next.name) : '') + ' #' + (r.rank + 1) + ' \u2192</button></div></div>' + footer();
     document.getElementById('back').addEventListener('click', function () { location.hash = ''; });

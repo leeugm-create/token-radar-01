@@ -171,3 +171,31 @@ rows must come from outside the watchlist.
   filtered 207 KiB, all 1440×1100, visually inspected.
 - **Verification**: two runs byte-identical; board.json 422,730 B; dossier.json 1,108,412 B;
   implied order re-checked non-increasing across all 216 rows after the change.
+
+## Phase 3 — variant C (radar-5): farm EV verdicts
+
+- **Farm economics** (`farmEconomics`): summed from each plan's own stated figures — the setup
+  steps' minutes (5+10+15+10) plus a 10-minute action and a 5-minute log check per week of the
+  plan's holding window, and gas for four setup transactions plus one per weekly action, at the
+  plan's own per-chain gas estimate. Hours run 1.9–2.9 per plan; sunk costs $0.33–$104 (Ethereum
+  mainnet plans are the expensive end). The position's capital ($50–$250 by TVL tier) is reported
+  separately and never counted as a cost — it is the farmer's to withdraw.
+- **Verdict** (`farmVerdict`): every plan gains an eighth step (8 steps per row, all 146–553
+  chars, inside the 3–12 × 20–600 gate) stating the hours, the sunk cost, the gross capture at one
+  stated assumption — a farmer captures 0.05% of a launch's implied value — the odds-weighted
+  expected capture, and the break-even launch value (`sunk / (odds × capture)`), with the board's
+  implied value held against that bar and the plain caveat that the likeliest single outcome is
+  still no launch at all. Rows also carry `farm_hours`, `farm_sunk_cost_usd`, `farm_capital_usd`,
+  `farm_breakeven_usd`, `farm_ev_usd` and `farm_ev_per_hour`. 212 of 216 plans clear their bar by
+  a wide margin and 4 clear it — computed, not tuned: gas is genuinely cheap next to the implied
+  values, which is exactly why the verdict leads with the no-launch outcome instead of the ratio.
+  The $/hour figure is kept as a data field and a dashboard chip, deliberately not headlined in
+  the verdict sentence, where it would read as a promise.
+- **Dashboard**: a verdict block (amber-ruled) above each farm plan with the six figures and the
+  bar verdict; the model panel's odds paragraph now states the capture assumption. Source
+  30,826 B, fully offline.
+- **Screenshots**: a fourth shot added (the rules allow 3–4) framing the verdict block and the
+  full plan. Board 240 KiB, detail 209 KiB, filtered 207 KiB, verdict 213 KiB, all 1440×1100;
+  dossier with four images 1,218,677 B, inside the 1.5 MiB cap.
+- **Verification**: two runs byte-identical; board.json 569,980 B; farm step counts and lengths
+  audited across all 216 rows (8 steps each, 146–553 chars).

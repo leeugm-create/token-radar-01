@@ -4,8 +4,9 @@
 // pre-token protocol with the model in lib/model.ts (radar-4: each category priced at the market's own
 // median mcap/TVL for that category, shrunk toward the market-wide median, then adjusted for seven-day
 // growth and maturity — the fitted multiples validated on the snapshot's own live-token protocols
-// by leave-one-out, split-half and walk-forward tests, whose residuals set each row's 80% range, and
-// each row carrying a launch-odds proxy from the peers' record with the expected value it implies),
+// by leave-one-out, split-half and walk-forward tests, whose residuals set each row's 80% range,
+// each row carrying a launch-odds proxy from the peers' record with the expected value it implies,
+// and every farm plan closing with a verdict summed from the plan's own times and gas),
 // writes the ranked board to /output/board.json, and copies this repository's
 // dashboard/ and screenshots/ to /output. Last, it writes /output/dossier.json, the summary the judge
 // reads, with the vendored make.fun library.

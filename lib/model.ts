@@ -33,6 +33,11 @@
 // by the share of the protocol's own age cohort. That is a cross-sectional share at one moment,
 // not a prediction — the dashboard says so wherever the figure appears. The board itself stays
 // ranked by implied value (the gate's order); expected value is a column and a sort on the page.
+//
+// And each farm plan ends in a verdict (farmVerdict): the plan's own stated times and gas summed
+// into hours and a sunk cost — the position's capital is the farmer's to keep and is never counted
+// as a cost — set against an odds-weighted return at one stated capture assumption (FARM_CAPTURE
+// of a launch's implied value), with the launch value the plan needs to break even.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -85,7 +90,10 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-4';
+export const MODEL_VERSION = 'radar-5';
+
+/** The stated capture assumption behind every farm verdict: a farmer's share of a launch's value. */
+export const FARM_CAPTURE = 0.0005;
 
 /** How many early protocols below the floor the board carries, chosen by radar score. */
 export const EARLY_ROWS = 176;
@@ -120,6 +128,12 @@ export interface BoardRow {
   implied_high_usd: number;
   launch_odds: number;
   expected_value_usd: number;
+  farm_hours: number;
+  farm_sunk_cost_usd: number;
+  farm_capital_usd: number;
+  farm_breakeven_usd: number;
+  farm_ev_usd: number;
+  farm_ev_per_hour: number;
   model: {
     base_multiple: number;
     comparables: number;
@@ -148,6 +162,12 @@ export interface RadarRow {
   implied_high_usd: number;
   launch_odds: number;
   expected_value_usd: number;
+  farm_hours: number;
+  farm_sunk_cost_usd: number;
+  farm_capital_usd: number;
+  farm_breakeven_usd: number;
+  farm_ev_usd: number;
+  farm_ev_per_hour: number;
   base_multiple: number;
   comparables: number;
   growth_multiplier: number;
@@ -215,6 +235,7 @@ export interface RadarData {
   model_version: string;
   validation: ValidationSummary;
   odds: OddsSummary;
+  farm_capture: number;
   global_multiple: number;
   multiples: CategoryMultiple[];
   watchlist_size: number;
@@ -594,6 +615,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, va
     const low = Math.max(1, Math.round(s.implied * band.lo));
     const high = Math.max(low, Math.round(s.implied * band.hi));
     const o = odds.oddsFor(s.p);
+    const verdict = farmVerdict(s.p, s.age, s.implied, o);
     return {
     rank: i + 1,
     slug: s.p.slug,
@@ -613,6 +635,12 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, va
     implied_high_usd: high,
     launch_odds: o,
     expected_value_usd: Math.max(1, Math.round(s.implied * o)),
+    farm_hours: verdict.econ.hours,
+    farm_sunk_cost_usd: verdict.econ.sunk_cost_usd,
+    farm_capital_usd: verdict.econ.capital_usd,
+    farm_breakeven_usd: verdict.breakeven_usd,
+    farm_ev_usd: verdict.ev_usd,
+    farm_ev_per_hour: verdict.ev_per_hour,
     model: {
       base_multiple: round4(s.baseMultiple),
       comparables: s.comparables,
@@ -621,7 +649,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, va
       maturity_multiplier: round4(s.maturityMult),
       age_days: s.age,
     },
-    farm_steps: farmSteps(s.p, s.age).map(stepText),
+    farm_steps: [...farmSteps(s.p, s.age).map(stepText), verdict.step],
     };
   });
 }
@@ -642,9 +670,14 @@ const CHAIN_GAS: Record<string, number> = {
   Sonic: 0.05, Unichain: 0.15, Hyperliquid: 0.05, Sui: 0.02, Aptos: 0.02, Near: 0.02, Cosmos: 0.05,
 };
 
+/** The gas estimate for one interaction on `chain`, in USD. */
+function gasUsd(chain: string): number {
+  return CHAIN_GAS[chain] ?? 0.5;
+}
+
 /** The gas estimate for one interaction on `chain`, as words a plan can carry. */
 function gasWords(chain: string): string {
-  const gas = CHAIN_GAS[chain] ?? 0.5;
+  const gas = gasUsd(chain);
   if (gas < 0.1) return 'a few cents of gas';
   if (gas < 1) return `about $${gas.toFixed(2)} of gas`;
   return `about $${Math.round(gas)} of gas`;
@@ -787,6 +820,76 @@ export function farmSteps(p: SnapshotProtocol, age: number | null): FarmStep[] {
   ];
 }
 
+/** A farm plan's own arithmetic, summed from the times and gas its steps state. */
+export interface FarmEconomics {
+  capital_usd: number;
+  gas_usd: number;
+  hold_days: number;
+  weeks: number;
+  hours: number;
+  sunk_cost_usd: number;
+}
+
+/**
+ * What a plan costs, from the plan itself: the setup steps' stated minutes (5+10+15+10) plus a
+ * 10-minute action and a 5-minute log check in each week of its holding window; gas for four
+ * setup transactions plus one per weekly action. The position's capital is the farmer's to keep
+ * and is reported apart — it is not part of the sunk cost.
+ */
+export function farmEconomics(p: SnapshotProtocol, age: number | null): FarmEconomics {
+  const gas = gasUsd(chainOf(p));
+  const hold = holdDaysFor(age);
+  const weeks = Math.ceil(hold / 7);
+  const minutes = 40 + 15 * weeks;
+  return {
+    capital_usd: capitalFor(p),
+    gas_usd: gas,
+    hold_days: hold,
+    weeks,
+    hours: Math.round((minutes / 60) * 10) / 10,
+    sunk_cost_usd: Math.round(gas * (4 + weeks) * 100) / 100,
+  };
+}
+
+const fmtInt = (n: number): string => String(Math.round(n)).replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+const fmtMoney = (n: number): string => (n < 10 ? `$${n.toFixed(2)}` : `$${fmtInt(n)}`);
+
+/** A farm verdict: the plan's economics, its break-even launch value, and its odds-weighted return. */
+export interface FarmVerdict {
+  step: string;
+  econ: FarmEconomics;
+  breakeven_usd: number;
+  ev_usd: number;
+  ev_per_hour: number;
+}
+
+/**
+ * The verdict that closes a row's farm plan: hours and sunk cost from the plan's own figures, an
+ * odds-weighted return at the stated FARM_CAPTURE share of a launch at the implied value, and the
+ * launch value above which the plan pays for itself — with the board's own implied value held
+ * against that bar.
+ */
+export function farmVerdict(p: SnapshotProtocol, age: number | null, implied: number, odds: number): FarmVerdict {
+  const econ = farmEconomics(p, age);
+  const breakeven = Math.round(econ.sunk_cost_usd / (odds * FARM_CAPTURE));
+  const ev = Math.round(odds * FARM_CAPTURE * implied);
+  const evPerHour = Math.round((ev / econ.hours) * 10) / 10;
+  const bar = implied >= breakeven * 3
+    ? 'clears that bar by a wide margin'
+    : implied >= breakeven
+      ? 'clears that bar'
+      : 'does not clear that bar at these odds';
+  const gross = Math.round(FARM_CAPTURE * implied);
+  const step =
+    `Verdict: about ${econ.hours} hours of work spread over ${econ.hold_days} days; sunk cost about ${fmtMoney(econ.sunk_cost_usd)} ` +
+    `in gas and fees (the $${fmtInt(econ.capital_usd)} position is capital you keep, not a cost). If the token launches at the ` +
+    `implied $${fmtInt(implied)}, an assumed ${(FARM_CAPTURE * 100).toFixed(2)}% farmer capture is worth about $${fmtInt(gross)}; ` +
+    `weighted by the ${Math.round(odds * 100)}% launch odds, that is about $${fmtInt(ev)} expected, against a break-even launch ` +
+    `value of $${fmtInt(breakeven)} — the board's implied value ${bar}. The likeliest single outcome is still no launch ` +
+    `at all: the position stays yours to withdraw, and only the sunk cost is gone.`;
+  return { step, econ, breakeven_usd: breakeven, ev_usd: ev, ev_per_hour: evPerHour };
+}
+
 /** The live-token protocols, by market cap, for the dashboard's Live token view. */
 export function liveRows(snapshot: Snapshot): LiveRow[] {
   return snapshot.protocols
@@ -823,6 +926,12 @@ export function radarRow(row: BoardRow, watchlist: Set<string>): RadarRow {
     implied_high_usd: row.implied_high_usd,
     launch_odds: row.launch_odds,
     expected_value_usd: row.expected_value_usd,
+    farm_hours: row.farm_hours,
+    farm_sunk_cost_usd: row.farm_sunk_cost_usd,
+    farm_capital_usd: row.farm_capital_usd,
+    farm_breakeven_usd: row.farm_breakeven_usd,
+    farm_ev_usd: row.farm_ev_usd,
+    farm_ev_per_hour: row.farm_ev_per_hour,
     base_multiple: row.model.base_multiple,
     comparables: row.model.comparables,
     growth_multiplier: row.model.growth_multiplier,
@@ -853,6 +962,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     model_version: MODEL_VERSION,
     validation: validation.summary,
     odds: odds.summary,
+    farm_capture: FARM_CAPTURE,
     global_multiple: round4(pricing.global),
     multiples,
     watchlist_size: snapshot.watchlist.length,
