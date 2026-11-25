@@ -1,7 +1,8 @@
 // Token Radar's dashboard. It reads window.RADAR (written beside dashboard/ by main.ts) and renders
-// five views from it: the ranked pre-token board, a detail view for every protocol on it, the
+// six views from it: the ranked pre-token board, a detail view for every protocol on it, the
 // live-token table whose market values anchor the model's multiples, a full ledger accounting
-// for every protocol in the snapshot, and a proof panel that charts the model's held-out tests.
+// for every protocol in the snapshot, a proof panel that charts the model's held-out tests, and
+// a verdict view that gives the board's top pick and its farm verdict a screen of their own.
 // Sortable, filterable, and rendered entirely from data.js: no fetch, no network, nothing leaves
 // the page.
 (function () {
@@ -180,6 +181,7 @@
       '<span class="count" id="count"></span>' +
       '<div class="tabs" role="group" aria-label="Views">' +
       '<button id="tab-board" aria-pressed="' + (state.view === 'board') + '">Pre-token board</button>' +
+      '<button id="tab-verdict" aria-pressed="' + (state.view === 'verdict') + '">Verdict</button>' +
       '<button id="tab-live" aria-pressed="' + (state.view === 'live') + '">Live tokens</button>' +
       '<button id="tab-ledger" aria-pressed="' + (state.view === 'ledger') + '">Full ledger</button>' +
       '<button id="tab-proof" aria-pressed="' + (state.view === 'proof') + '">Proof</button></div></div>';
@@ -353,6 +355,51 @@
     if (c) c.textContent = 'held-out proof';
   }
 
+  /* ---------- verdict view: the top pick's farm verdict, on its own screen ---------- */
+  function verdictView() {
+    var r = rows[0];
+    if (!r) { boardView(); return; }
+    var sunk = r.farm_sunk_cost_usd < 10 ? '$' + r.farm_sunk_cost_usd.toFixed(2) : fmtUsd(r.farm_sunk_cost_usd);
+    var clears = r.implied_value_usd >= r.farm_breakeven_usd;
+    var body = '<section class="vhero">' +
+      '<div class="hero-k">The farm verdict \u2014 board #1 of ' + rows.length + ', on its own screen</div>' +
+      '<div class="vname">' + esc(r.name) +
+      (r.watchlist ? '<span class="badge wl">WATCHLIST</span>' : '<span class="badge early">EARLY FIND</span>') + '</div>' +
+      '<div class="hero-cat">' + esc(r.category || 'Uncategorised') + ' \u00b7 TVL ' + fmtUsd(r.tvl_usd) + ' \u00b7 ' +
+      fmtAge(r.age_days) + ' with no token \u00b7 on ' + esc(r.chains.join(', ') || 'no chain recorded') + '</div>' +
+      '<div class="vstatement">The implied value <span class="' + (clears ? 'pos' : 'neg') + '">' + barWord(r) + '</span>.</div>' +
+      '<div class="hero-grid"><div class="hero-main">' +
+      '<div class="hero-val">' + fmtUsd(r.implied_value_usd) + '</div>' +
+      '<div class="hero-full">implied token value ' + fmtFull(r.implied_value_usd) + ' \u00b7 80% held-out range ' +
+      fmtUsd(r.implied_low_usd) + ' \u2013 ' + fmtUsd(r.implied_high_usd) + '</div></div>' +
+      '<div class="hero-side">' +
+      '<div class="hero-odds"><span>Launch odds <b>' + fmtOdds(r.launch_odds) + '</b></span>' +
+      '<span class="obar big"><i style="width:' + Math.round(r.launch_odds * 100) + '%"></i></span>' +
+      '<span class="hero-ev">expected value <b>' + fmtUsd(r.expected_value_usd) + '</b></span></div>' +
+      '<div class="hero-full">expected value ' + fmtFull(r.expected_value_usd) + ' = implied \u00d7 odds \u00b7 the position\u2019s ' +
+      'capital is the farmer\u2019s to keep and is never counted as a cost</div>' +
+      '</div></div>' +
+      '<div class="cards vcards">' +
+      '<div class="card"><div class="k">Hours of work</div><div class="v">' + r.farm_hours + ' h</div><div class="s">spread over the plan below</div></div>' +
+      '<div class="card"><div class="k">Sunk cost</div><div class="v">' + sunk + '</div><div class="s">gas and fees \u2014 all that is gone if nothing launches</div></div>' +
+      '<div class="card"><div class="k">Capital kept</div><div class="v">' + fmtUsd(r.farm_capital_usd) + '</div><div class="s">principal in the position, yours to withdraw</div></div>' +
+      '<div class="card"><div class="k">Break-even launch</div><div class="v">' + fmtUsd(r.farm_breakeven_usd) + '</div><div class="s">the launch value at which the plan breaks even</div></div>' +
+      '<div class="card"><div class="k">Expected capture</div><div class="v">' + fmtUsd(r.farm_ev_usd) + '</div><div class="s">at a ' + (DATA.farm_capture * 100).toFixed(2) + '% farmer capture, odds-weighted</div></div>' +
+      '<div class="card"><div class="k">Per hour expected</div><div class="v">' + fmtUsd(r.farm_ev_per_hour) + '</div><div class="s">expected capture over ' + r.farm_hours + ' h of work</div></div>' +
+      '</div>' +
+      '<p class="vcaveat">The likeliest single outcome is still no launch at all: the position stays yours ' +
+      'to withdraw, and only the sunk cost is gone.</p>' +
+      '</section>' +
+      '<h3 class="vplan-h">The plan, step by step</h3>' +
+      '<ol class="plan vplan">' + r.farm_steps.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ol>' +
+      '<p class="vmore"><button class="back" id="vdetail">Open the full detail \u2014 model breakdown and ranges \u2192</button></p>';
+    app.innerHTML = masthead() + integrityStrip() + controls() + body + footer();
+    wireControls();
+    document.getElementById('vdetail').addEventListener('click', function () { location.hash = 'p/' + r.slug; });
+    var c = document.getElementById('count');
+    if (c) c.textContent = 'the #1 verdict';
+  }
+
   /* ---------- detail view ---------- */
   function detailView(r) {
     var prev = bySlug[rows[r.rank - 2] ? rows[r.rank - 2].slug : ''];
@@ -399,8 +446,8 @@
   }
 
   /* ---------- wiring & routing ---------- */
-  // The live, ledger and proof views show their whole set, never a board filter: switching to
-  // one clears the board's filters, so a filter set on the board can never leak into them.
+  // The live, ledger, proof and verdict views show their whole set, never a board filter:
+  // switching to one clears the board's filters, so a filter set on the board can never leak.
   function resetBoardFilters() {
     state.q = ''; state.category = 'all'; state.chain = 'all'; state.status = 'all';
   }
@@ -415,6 +462,8 @@
     if (fs) fs.addEventListener('change', function () { state.status = fs.value; refreshList(); });
     var tb = document.getElementById('tab-board');
     if (tb) tb.addEventListener('click', function () { state.view = 'board'; window.scrollTo(0, 0); render(); });
+    var tv = document.getElementById('tab-verdict');
+    if (tv) tv.addEventListener('click', function () { resetBoardFilters(); state.view = 'verdict'; window.scrollTo(0, 0); render(); });
     var tl = document.getElementById('tab-live');
     if (tl) tl.addEventListener('click', function () { resetBoardFilters(); state.view = 'live'; window.scrollTo(0, 0); render(); });
     var tg = document.getElementById('tab-ledger');
@@ -446,6 +495,7 @@
     else if (state.view === 'live') liveView();
     else if (state.view === 'ledger') ledgerView();
     else if (state.view === 'proof') proofView();
+    else if (state.view === 'verdict') verdictView();
     else boardView();
     app.setAttribute('aria-busy', 'false');
   }
@@ -459,6 +509,7 @@
       state.category = decodeURIComponent(h.slice(2));
       state.view = 'board'; state.slug = null; render(); return;
     }
+    if (h === 'verdict') { resetBoardFilters(); state.view = 'verdict'; state.slug = null; window.scrollTo(0, 0); render(); return; }
     if (h === 'live') { resetBoardFilters(); state.view = 'live'; state.slug = null; window.scrollTo(0, 0); render(); return; }
     if (h === 'ledger') { resetBoardFilters(); state.view = 'ledger'; state.slug = null; window.scrollTo(0, 0); render(); return; }
     if (h === 'proof') { resetBoardFilters(); state.view = 'proof'; state.slug = null; window.scrollTo(0, 0); render(); return; }

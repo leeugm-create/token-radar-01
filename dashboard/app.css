@@ -151,6 +151,18 @@ ol.plan li::marker { color: var(--glow); font-family: var(--mono); }
 tbody tr.top td { background: rgba(60, 232, 143, .05); }
 tbody tr.top .pname { font-size: 16px; }
 
+/* Verdict view: the top pick's farm verdict on its own screen */
+.vhero { background: linear-gradient(180deg, var(--panel2), var(--panel)); border: 1px solid var(--line2);
+  border-left: 3px solid var(--amber); border-radius: 10px; padding: 20px 22px 16px; margin-top: 12px; }
+.vname { font-size: 34px; font-weight: 650; margin-top: 6px; }
+.vstatement { font-size: 29px; font-weight: 650; line-height: 1.28; margin: 14px 0 16px; max-width: 36ch; }
+.vcards { margin: 18px 0 4px; }
+.vcaveat { color: var(--muted); margin: 12px 0 2px; max-width: 88ch; }
+.vplan-h { font-size: 13px; text-transform: uppercase; letter-spacing: 1.6px; color: var(--glow); margin: 24px 0 12px; }
+ol.vplan li { font-size: 15.5px; margin-bottom: 12px; }
+.vmore { margin-top: 20px; }
+.vmore .back { margin: 0; }
+
 /* Ledger */
 .badge.live { color: #7cc7ff; border-color: rgba(124, 199, 255, .5); }
 .badge.onb { color: var(--glow); border-color: rgba(60, 232, 143, .4); }

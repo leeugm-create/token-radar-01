@@ -1,7 +1,7 @@
 // A working token-radar-01 entry (Node 22, standard library only).
 //
 // The program reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), scores every
-// pre-token protocol with the model in lib/model.ts (radar-7: each category priced at the market's own
+// pre-token protocol with the model in lib/model.ts (radar-8: each category priced at the market's own
 // median mcap/TVL for that category, shrunk toward the market-wide median, then adjusted for seven-day
 // growth and maturity — the fitted multiples validated on the snapshot's own live-token protocols
 // by leave-one-out, split-half and walk-forward tests, whose residuals set each row's 80% range,

@@ -90,7 +90,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-7';
+export const MODEL_VERSION = 'radar-8';
 
 /** The stated capture assumption behind every farm verdict: a farmer's share of a launch's value. */
 export const FARM_CAPTURE = 0.0005;

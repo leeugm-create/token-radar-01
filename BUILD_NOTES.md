@@ -265,3 +265,50 @@ rows must come from outside the watchlist.
   `https://` anywhere in `dashboard/`). Two runs into separate output dirs are byte-identical
   (`diff -r` clean); board.json 569,980 B; data.js 704,726 B; dossier.json 1,374,945 B
   (≤ 1.5 MiB); `main.ts`'s sealed `boardIssue` gate passes on every run.
+
+## Phase 6 — v7 (radar-8): the verdict gets its screenshot back
+
+- **One lever, pulled on purpose**: v6 (945,458, rank 916) spent its four screenshot slots on
+  board / detail / ledger / proof. The ledger shot is a dense data table — visually the weakest
+  of the four — while variant C's dedicated verdict framing (the top pick's farming verdict and
+  full plan as the hero of their own screen) had been folded into v6's detail shot. Phase 6
+  reverses exactly that trade: the verdict screenshot returns as `3-verdict.png`, and the ledger
+  leaves the screenshot set. The ledger **view** stays in the app, fully functional (tab, class
+  filter, search) — it just no longer spends a screenshot slot. Everything else is v6: the
+  pricing model, board membership, hero card, proof view and every number are unchanged, and
+  `board.json` is byte-identical to v6's run (569,980 B, sha256
+  `2ef0e6308f8c0759648236e6ee1edb5f6ac9ec6a7f58877400564c7930501430` in both). The only model
+  touch is the version label, radar-7 → radar-8.
+- **Verdict view** (new `#verdict` route plus a Verdict tab, wired with the same filter-leak
+  guard as live / ledger / proof): the board's #1, Steakhouse Financial, presented the way C's
+  verdict framing presented it, in v6's hero-card language — an amber-ruled panel with the
+  verdict statement in 29 px type ("The implied value **clears its bar by a wide margin**."), the
+  $1.51B implied value at hero size with its full figure and 80% range, the launch-odds bar
+  (15%) and expected value ($225.5M), then six stat cards — 1.9 h of work, sunk cost $1.35,
+  capital kept $150 (principal, stated as the farmer's to withdraw, never a cost), break-even
+  launch $18K, expected capture $113K, $59K per hour expected — the honest no-launch caveat, and
+  the full eight-step farm plan below. Every value is read from the same runtime row the detail
+  view renders, and the shot was checked figure-by-figure against the detail view: implied
+  $1,513,495,408, range $129,006,121 – $23,157,410,805, expected $225,510,816, break-even
+  $18,121 — identical.
+- **Screenshots** (1440×1100, the stdlib CDP driver `~/workspace/makefun-agent/shoot.mjs` over
+  Puppeteer's chrome-headless-shell — the sandbox's bundled Chromium build refuses headless CLI
+  use — with the Phase-4 hash-navigation race fix kept; detail framed at scrollY 520 exactly as
+  in v6): `1-board.png` 280,633 B (v6's framing; the tab strip gains Verdict, the masthead now
+  reads radar-8), `2-detail.png` 220,003 B (breakdown, verdict block and full plan, as v6),
+  `3-verdict.png` 282,777 B (the new verdict view: masthead, integrity strip, verdict panel and
+  the plan's first steps fill the frame), `4-proof.png` 252,780 B (the four held-out bars, as
+  v6). All four visually inspected; all inside the gate's 3–4 count and 512 KiB caps.
+  `screenshots/3-ledger.png` is removed from the repo.
+- **Sizes and verification**: dashboard source index.html 587 B + app.css 12,845 B + app.js
+  37,123 B = **50,555 B**, under the 64 KB dossier cap, fully offline (no `http://` or
+  `https://` anywhere in `dashboard/`). Two runs of the shipped state into separate output dirs
+  are byte-identical (`diff -r` clean); board.json 569,980 B (sha256 above — unchanged from
+  v6); data.js 704,726 B; dossier.json 1,434,337 B (≤ 1.5 MiB); `main.ts`'s sealed `boardIssue`
+  gate passes on every run. Self-check strip, on the shipped output and visible in the shots:
+  **758 of 758 protocols accounted for · watchlist 40 of 40 on the board · 216 board rows
+  repriced from the snapshot at run time · 0 mismatches**. Separation audit on the shipped
+  output: board rows carrying a token **0 of 216** (every row `pre-token`, symbol and market cap
+  null); ledger live-token entries carrying an implied value **0 of 416** (a `LedgerEntry` has
+  no implied-value field); board implied values strictly descending across all 216 rows; farm
+  plans 8 steps per row.
