@@ -42,6 +42,7 @@
   function fmtMult(x) { return '×' + Number(x).toFixed(3); }
   function fmtX(x) { return '×' + Number(x).toFixed(2); }
   function fmtShare(x) { return Math.round(Number(x) * 100) + '%'; }
+  function fmtOdds(x) { return Math.round(Number(x) * 100) + '%'; }
 
   /* ---------- shared chrome ---------- */
   function masthead() {
@@ -73,7 +74,13 @@
       'so one rich outlier cannot carry a category. Seven-day growth and the protocol\u2019s age with no ' +
       'token then adjust the price; nothing else enters, and no protocol is named or special-cased.</p>' +
       '<span class="formula">implied = TVL \u00d7 category multiple \u00d7 (1 + clamped 7d change \u00d7 0.45) \u00d7 (0.65 + 0.35 \u00d7 age/3y)</span>' +
-      '<div class="mults">' + chips + '</div></section>';
+      '<div class="mults">' + chips + '</div>' +
+      '<p class="oddsline"><b>Launch odds</b> come from the peers\u2019 record: across the snapshot\u2019s ' +
+      DATA.odds.protocols_n + ' protocols, ' + fmtShare(DATA.odds.global_rate) + ' already record a token. A row\u2019s odds are ' +
+      'the token share of its own category, smoothed toward that market share, tilted by its age cohort\u2019s share. ' +
+      'That is a cross-sectional share at one moment \u2014 what fraction of its peers have a token \u2014 not a prediction ' +
+      'that this protocol will launch. <b>Expected value</b> is the two figures multiplied, and the board can be sorted by it.</p>' +
+      '<span class="formula">expected = implied \u00d7 launch odds</span></section>';
   }
   function validationPanel() {
     var v = DATA.validation;
@@ -130,7 +137,9 @@
     change: { label: '7d', num: true, get: function (r) { return r.change_7d === null ? -Infinity : r.change_7d; } },
     age: { label: 'Age', num: true, get: function (r) { return r.age_days === null ? -1 : r.age_days; } },
     mult: { label: 'Cat. \u00d7', num: true, get: function (r) { return r.base_multiple; } },
-    implied: { label: 'Implied value', num: true, get: function (r) { return r.implied_value_usd; } }
+    implied: { label: 'Implied value', num: true, get: function (r) { return r.implied_value_usd; } },
+    odds: { label: 'Odds', num: true, get: function (r) { return r.launch_odds; } },
+    expected: { label: 'Expected', num: true, get: function (r) { return r.expected_value_usd; } }
   };
   function visibleRows() {
     var q = state.q.trim().toLowerCase();
@@ -156,7 +165,7 @@
     var head = Object.keys(SORTS).map(function (key) {
       var s = SORTS[key];
       var dir = state.sort === key ? ' <span class="dir">' + (state.dir === 1 ? '\u25b2' : '\u25bc') + '</span>' : '';
-      var hide = key === 'age' || key === 'mult' ? ' class="num hideS"' : s.num ? ' class="num"' : '';
+      var hide = key === 'age' || key === 'mult' || key === 'odds' ? ' class="num hideS"' : s.num ? ' class="num"' : '';
       return '<th' + hide + '><button data-sort="' + key + '">' + s.label + dir + '</button></th>';
     }).join('') + '<th>Chains</th>';
     var body;
@@ -177,6 +186,8 @@
             '<td class="num hideS">' + fmtAge(r.age_days) + '</td>' +
             '<td class="num hideS">' + fmtMult(r.base_multiple) + '</td>' +
             '<td class="num">' + fmtUsd(r.implied_value_usd) + '<span class="bar"><i style="width:' + w + '%"></i></span></td>' +
+            '<td class="num hideS">' + fmtOdds(r.launch_odds) + '</td>' +
+            '<td class="num">' + fmtUsd(r.expected_value_usd) + '</td>' +
             '<td class="chains">' + esc(r.chains.slice(0, 3).join(', ')) + (r.chains.length > 3 ? ' +' + (r.chains.length - 3) : '') + '</td></tr>';
         }).join('') + '</tbody></table>';
     }
@@ -216,7 +227,9 @@
       '<tr><td>Growth multiplier (7d change ' + (r.change_7d === null ? 'unreported, taken as 0' : r.change_7d.toFixed(2) + '%') + ', clamped)</td><td>' + fmtMult(r.growth_multiplier) + '</td></tr>' +
       '<tr><td>Maturity multiplier (age ' + fmtAge(r.age_days) + ' with no token)</td><td>' + fmtMult(r.maturity_multiplier) + '</td></tr>' +
       '<tr class="total"><td>Implied token value</td><td>' + fmtFull(r.implied_value_usd) + '</td></tr>' +
-      '<tr><td>80% held-out range (where comparable launches actually landed)</td><td>' + fmtFull(r.implied_low_usd) + ' \u2013 ' + fmtFull(r.implied_high_usd) + '</td></tr></tbody></table>';
+      '<tr><td>80% held-out range (where comparable launches actually landed)</td><td>' + fmtFull(r.implied_low_usd) + ' \u2013 ' + fmtFull(r.implied_high_usd) + '</td></tr>' +
+      '<tr><td>Launch odds (peers\u2019 record: category token share, age-tilted)</td><td>' + fmtOdds(r.launch_odds) + '</td></tr>' +
+      '<tr class="total"><td>Expected value (implied \u00d7 odds)</td><td>' + fmtFull(r.expected_value_usd) + '</td></tr></tbody></table>';
     var plan = '<ol class="plan">' + r.farm_steps.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ol>';
     app.innerHTML = masthead() +
       '<div class="detail"><button class="back" id="back">\u2190 Back to the board</button>' +

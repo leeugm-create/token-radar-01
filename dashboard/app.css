@@ -58,6 +58,7 @@ button, input, select { font: inherit; color: inherit; }
 .mults .n { color: var(--faint); }
 .valid { margin-top: 10px; }
 .valid h2 { color: var(--amber); }
+.model .oddsline { margin-top: 12px; }
 
 /* Controls */
 .controls { position: sticky; top: 0; z-index: 5; background: rgba(6, 9, 12, .92); backdrop-filter: blur(6px);

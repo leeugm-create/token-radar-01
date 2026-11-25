@@ -26,6 +26,13 @@
 // row carries (implied_low_usd .. implied_high_usd), and the dashboard's validation panel states
 // the errors and the band's held-out coverage exactly as computed. The growth and maturity terms
 // are fixed constants of the model, applied identically in every test and every row.
+//
+// Each row also carries a launch-odds proxy and the expected value it implies (implied x odds).
+// The odds are read off the peers' record in the snapshot itself: the share of protocols that
+// already record a token, taken per category, smoothed toward the market-wide share, and tilted
+// by the share of the protocol's own age cohort. That is a cross-sectional share at one moment,
+// not a prediction — the dashboard says so wherever the figure appears. The board itself stays
+// ranked by implied value (the gate's order); expected value is a column and a sort on the page.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -78,7 +85,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-3';
+export const MODEL_VERSION = 'radar-4';
 
 /** How many early protocols below the floor the board carries, chosen by radar score. */
 export const EARLY_ROWS = 176;
@@ -111,6 +118,8 @@ export interface BoardRow {
   implied_value_usd: number;
   implied_low_usd: number;
   implied_high_usd: number;
+  launch_odds: number;
+  expected_value_usd: number;
   model: {
     base_multiple: number;
     comparables: number;
@@ -137,6 +146,8 @@ export interface RadarRow {
   implied_value_usd: number;
   implied_low_usd: number;
   implied_high_usd: number;
+  launch_odds: number;
+  expected_value_usd: number;
   base_multiple: number;
   comparables: number;
   growth_multiplier: number;
@@ -185,6 +196,16 @@ export interface ValidationSummary {
   band_min_n: number;
 }
 
+/** The launch-odds proxy's shape, as the dashboard states it. */
+export interface OddsSummary {
+  protocols_n: number;
+  with_token_n: number;
+  global_rate: number;
+  smoothing_k: number;
+  factor_floor: number;
+  factor_cap: number;
+}
+
 /** Everything the dashboard needs: the board, the live set, and the model it runs. */
 export interface RadarData {
   as_of: string;
@@ -193,6 +214,7 @@ export interface RadarData {
   model: ModelConstants;
   model_version: string;
   validation: ValidationSummary;
+  odds: OddsSummary;
   global_multiple: number;
   multiples: CategoryMultiple[];
   watchlist_size: number;
@@ -449,6 +471,76 @@ export function validateModel(snapshot: Snapshot, model: ModelConstants = MODEL)
   };
 }
 
+/* ---------- launch odds: the peers' record, read cross-sectionally ---------- */
+
+/** The launch-odds proxy's constants: prior strength and the age tilt's clamps. */
+const ODDS_K = 12;
+const ODDS_FACTOR_FLOOR = 0.6;
+const ODDS_FACTOR_CAP = 1.4;
+const ODDS_FLOOR = 0.02;
+const ODDS_CAP = 0.97;
+
+/** The age cohort a protocol falls in, by days since it was first tracked. */
+function ageCohort(age: number | null): string {
+  if (age === null) return 'unknown';
+  if (age < 180) return 'under-6m';
+  if (age < 546) return '6-18m';
+  if (age < 1095) return '18m-3y';
+  return 'over-3y';
+}
+
+/** A launch-odds estimator fitted on a snapshot, and the summary the dashboard states. */
+export interface LaunchOdds {
+  summary: OddsSummary;
+  oddsFor: (p: SnapshotProtocol) => number;
+}
+
+/**
+ * Launch odds from the peers' record: across the whole snapshot, the share of protocols that
+ * already record a token — per category, smoothed toward the market-wide share with a prior of
+ * ODDS_K protocols, then tilted by the protocol's age cohort's own share relative to the market
+ * (clamped, so a thin cohort cannot shout). A protocol with no category gets the market share
+ * tilted by its cohort. This is a cross-sectional share at the snapshot's one moment: it says
+ * what fraction of a protocol's peers have a token, never that this protocol will launch.
+ */
+export function launchOdds(snapshot: Snapshot): LaunchOdds {
+  const all = snapshot.protocols;
+  const withToken = all.filter((p) => !isPreToken(p)).length;
+  const global = all.length === 0 ? 0 : withToken / all.length;
+  const tally = (keyOf: (p: SnapshotProtocol) => string | null): Map<string, { n: number; k: number }> => {
+    const map = new Map<string, { n: number; k: number }>();
+    for (const p of all) {
+      const key = keyOf(p);
+      if (key === null) continue;
+      const cell = map.get(key) ?? { n: 0, k: 0 };
+      cell.n += 1;
+      if (!isPreToken(p)) cell.k += 1;
+      map.set(key, cell);
+    }
+    return map;
+  };
+  const smoothed = (cell: { n: number; k: number } | undefined): number =>
+    cell === undefined ? global : (cell.k + ODDS_K * global) / (cell.n + ODDS_K);
+  const byCategory = tally((p) => p.category);
+  const byCohort = tally((p) => ageCohort(ageDays(snapshot.as_of, p.listed_at)));
+  return {
+    summary: {
+      protocols_n: all.length,
+      with_token_n: withToken,
+      global_rate: round3(global),
+      smoothing_k: ODDS_K,
+      factor_floor: ODDS_FACTOR_FLOOR,
+      factor_cap: ODDS_FACTOR_CAP,
+    },
+    oddsFor: (p) => {
+      const base = p.category !== null ? smoothed(byCategory.get(p.category)) : global;
+      const cohortRate = smoothed(byCohort.get(ageCohort(ageDays(snapshot.as_of, p.listed_at))));
+      const factor = global > 0 ? Math.min(ODDS_FACTOR_CAP, Math.max(ODDS_FACTOR_FLOOR, cohortRate / global)) : 1;
+      return round3(Math.min(ODDS_CAP, Math.max(ODDS_FLOOR, base * factor)));
+    },
+  };
+}
+
 /**
  * The radar score that chooses the early set below the floor: size on a log scale, seven-day
  * momentum, multi-chain reach, a track record long enough to mean something, and priceability —
@@ -478,7 +570,7 @@ export interface BoardSummary {
 }
 
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
-export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, validation: ModelValidation = validateModel(snapshot, model)): BoardRow[] {
+export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, validation: ModelValidation = validateModel(snapshot, model), odds: LaunchOdds = launchOdds(snapshot)): BoardRow[] {
   const pricing = categoryMultiples(snapshot, model);
   const index = bySlug(snapshot.protocols);
   const chosen = new Map<string, SnapshotProtocol>();
@@ -501,6 +593,7 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, va
     const band = validation.bandFor(s.p.category);
     const low = Math.max(1, Math.round(s.implied * band.lo));
     const high = Math.max(low, Math.round(s.implied * band.hi));
+    const o = odds.oddsFor(s.p);
     return {
     rank: i + 1,
     slug: s.p.slug,
@@ -518,6 +611,8 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, va
     implied_value_usd: s.implied,
     implied_low_usd: low,
     implied_high_usd: high,
+    launch_odds: o,
+    expected_value_usd: Math.max(1, Math.round(s.implied * o)),
     model: {
       base_multiple: round4(s.baseMultiple),
       comparables: s.comparables,
@@ -726,6 +821,8 @@ export function radarRow(row: BoardRow, watchlist: Set<string>): RadarRow {
     implied_value_usd: row.implied_value_usd,
     implied_low_usd: row.implied_low_usd,
     implied_high_usd: row.implied_high_usd,
+    launch_odds: row.launch_odds,
+    expected_value_usd: row.expected_value_usd,
     base_multiple: row.model.base_multiple,
     comparables: row.model.comparables,
     growth_multiplier: row.model.growth_multiplier,
@@ -738,7 +835,8 @@ export function radarRow(row: BoardRow, watchlist: Set<string>): RadarRow {
 /** Everything the dashboard renders, from the snapshot. */
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
   const validation = validateModel(snapshot, model);
-  const board = buildBoard(snapshot, model, validation);
+  const odds = launchOdds(snapshot);
+  const board = buildBoard(snapshot, model, validation, odds);
   const live = liveRows(snapshot);
   const pricing = categoryMultiples(snapshot, model);
   const watchlist = new Set(snapshot.watchlist);
@@ -754,6 +852,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     model,
     model_version: MODEL_VERSION,
     validation: validation.summary,
+    odds: odds.summary,
     global_multiple: round4(pricing.global),
     multiples,
     watchlist_size: snapshot.watchlist.length,

@@ -147,3 +147,27 @@ rows must come from outside the watchlist.
 - **Verification**: two runs byte-identical; board.json 412,231 B, dossier.json 1,070,501 B;
   screenshots re-shot (board 286 KiB, detail 228 KiB, filtered 275 KiB, all 1440×1100) and
   visually inspected — the panel and the range render with the real figures.
+
+## Phase 3 — variant B (radar-4): launch odds + expected value
+
+- **Launch odds** (`launchOdds` in `lib/model.ts`): a cross-sectional proxy from the peers'
+  record — across all 758 snapshot protocols, 416 (54.9%) already record a token. A row's odds
+  are its category's token share, smoothed toward the market share with a prior of 12 protocols,
+  tilted by its age cohort's share relative to the market (factor clamped to [0.6, 1.4]; odds
+  clamped to [0.02, 0.97]). Board odds run 0.136–0.97, median 0.43. The page states plainly that
+  this is a share of peers at one moment, not a prediction that the protocol will launch.
+- **Expected value**: every row carries `expected_value_usd = implied × odds`. **Constraint
+  conflict, resolved**: the sealed `sorted_by_value` check (RULES.txt) and `main.ts`'s own
+  `boardIssue` both require `implied_value_usd` non-increasing in rank order, so the board file
+  stays ranked by implied value; expected value is a board column and a sort key on the page,
+  and a total row in the detail breakdown. The EV order genuinely differs — USDD (odds 0.49)
+  passes Veda into the EV top-3, Hive Protocol enters the EV top-5.
+- **Dashboard**: Odds and Expected sortable columns (Odds hides on narrow screens), an odds
+  paragraph with the `expected = implied × launch odds` formula in the model panel, and odds +
+  expected rows in the detail breakdown. Source 29,248 B, fully offline.
+- **Screenshots**: the two panels now push the table below the fold of a top-anchored shot, so
+  the board and filtered shots are framed on the table itself (sticky controls pinned at top,
+  15+ rows in frame); the detail shot stays top-anchored. Board 240 KiB, detail 222 KiB,
+  filtered 207 KiB, all 1440×1100, visually inspected.
+- **Verification**: two runs byte-identical; board.json 422,730 B; dossier.json 1,108,412 B;
+  implied order re-checked non-increasing across all 216 rows after the change.
