@@ -90,7 +90,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-5';
+export const MODEL_VERSION = 'radar-7';
 
 /** The stated capture assumption behind every farm verdict: a farmer's share of a launch's value. */
 export const FARM_CAPTURE = 0.0005;
@@ -216,6 +216,17 @@ export interface ValidationSummary {
   band_min_n: number;
 }
 
+/**
+ * The independent cross-check: a log-space regression (ln market cap on ln TVL, a per-category
+ * effect and a momentum term), fitted and leave-one-out tested on the same live-token protocols
+ * by the same rule as the board's model. It prices nothing on the board; it stands on the proof
+ * panel as a second, differently-built estimator the board's numbers can be held against.
+ */
+export interface CrossCheckSummary {
+  live_n: number;
+  loo_median_error_x: number;
+}
+
 /** The launch-odds proxy's shape, as the dashboard states it. */
 export interface OddsSummary {
   protocols_n: number;
@@ -226,7 +237,39 @@ export interface OddsSummary {
   factor_cap: number;
 }
 
-/** Everything the dashboard needs: the board, the live set, and the model it runs. */
+/** How the ledger files one protocol of the snapshot. */
+export type LedgerClass =
+  | 'live-token'
+  | 'ranked'
+  | 'version-pool'
+  | 'derivative-class'
+  | 'derivative-name'
+  | 'exchange-name'
+  | 'above-floor'
+  | 'below-cut';
+
+/** One ledger line: every protocol in the snapshot, classified, with the reason stated. */
+export interface LedgerEntry {
+  slug: string;
+  name: string;
+  category: string | null;
+  tvl_usd: number;
+  class: LedgerClass;
+  reason: string;
+}
+
+/** The run's own re-derivation of its headline figures, as the integrity strip states it. */
+export interface IntegritySummary {
+  protocols_total: number;
+  protocols_accounted: number;
+  watchlist_total: number;
+  watchlist_covered: number;
+  board_rows: number;
+  rows_recomputed: number;
+  mismatches: number;
+}
+
+/** Everything the dashboard needs: the board, the live set, the ledger, and the model it runs. */
 export interface RadarData {
   as_of: string;
   source: string;
@@ -234,6 +277,7 @@ export interface RadarData {
   model: ModelConstants;
   model_version: string;
   validation: ValidationSummary;
+  crosscheck: CrossCheckSummary;
   odds: OddsSummary;
   farm_capture: number;
   global_multiple: number;
@@ -242,6 +286,9 @@ export interface RadarData {
   board_size: number;
   early_size: number;
   live_size: number;
+  ledger: LedgerEntry[];
+  ledger_counts: { class: LedgerClass; n: number }[];
+  integrity: IntegritySummary;
   rows: RadarRow[];
   live: LiveRow[];
 }
@@ -490,6 +537,130 @@ export function validateModel(snapshot: Snapshot, model: ModelConstants = MODEL)
       return { lo: Math.min(raw.lo, 1), hi: Math.max(raw.hi, 1) };
     },
   };
+}
+
+/* ---------- the cross-check: an independent log-space regression, tested the same way ---------- */
+
+/** The cross-check regression's own constants: how hard its category effects shrink, and its clamps. */
+export const REG = {
+  /** Residual shrinkage: a category's effect is its residual sum over (its n + this prior). */
+  effect_k: 5,
+  /** The effective multiple (priced value / TVL, growth included) is kept inside this band. */
+  mult_floor: 0.02,
+  mult_cap: 3.0,
+  /** The fitted momentum multiplier exp(c x change) is kept inside this band. */
+  growth_floor_x: 0.5,
+  growth_cap_x: 2.0,
+};
+
+/** Solve a small dense linear system by Gauss-Jordan elimination with partial pivoting. */
+function solveLinear(a: number[][], b: number[]): number[] {
+  const n = b.length;
+  const m = a.map((row, i) => [...row, b[i]!]);
+  for (let col = 0; col < n; col++) {
+    let piv = col;
+    for (let r = col + 1; r < n; r++) if (Math.abs(m[r]![col]!) > Math.abs(m[piv]![col]!)) piv = r;
+    const swap = m[col]!; m[col] = m[piv]!; m[piv] = swap;
+    const d = m[col]![col]!;
+    for (let r = 0; r < n; r++) {
+      if (r === col) continue;
+      const f = m[r]![col]! / d;
+      for (let k = col; k <= n; k++) m[r]![k] = m[r]![k]! - f * m[col]![k]!;
+    }
+  }
+  return m.map((row, i) => row[n]! / row[i]!);
+}
+
+/** The regression's fit on a set of protocols: its three coefficients and each category's effect. */
+export interface RegressionFit {
+  a: number;
+  b: number;
+  c: number;
+  eff: Map<string, { x: number; n: number }>;
+  n: number;
+}
+
+/**
+ * Fit ln(mcap) = a + b x ln(TVL) + c x (clamped 7d change / 100) on the set's live-token
+ * protocols by least squares (the normal equations, solved directly — three unknowns), then
+ * read each category's effect off the residuals: the category's residual sum over (n + K),
+ * which is its mean residual shrunk toward zero in proportion to its sample. A category the
+ * fit never saw carries no effect. Deterministic: the fit set's order is the caller's, and
+ * every caller passes snapshot order or a subsequence of it.
+ */
+export function fitRegression(protocols: SnapshotProtocol[]): RegressionFit {
+  const pts = protocols.filter((p) => !isPreToken(p) && p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0);
+  const feats = (p: SnapshotProtocol): [number, number, number] => [
+    1,
+    Math.log(p.tvl_usd),
+    Math.min(MODEL.growth_cap, Math.max(MODEL.growth_floor, finite(p.change_7d, 0))) / 100,
+  ];
+  const ata = [[0, 0, 0], [0, 0, 0], [0, 0, 0]];
+  const atb = [0, 0, 0];
+  for (const p of pts) {
+    const x = feats(p);
+    const y = Math.log(p.mcap_usd!);
+    for (let i = 0; i < 3; i++) {
+      atb[i] = atb[i]! + x[i] * y;
+      for (let j = 0; j < 3; j++) ata[i]![j] = ata[i]![j]! + x[i] * x[j]!;
+    }
+  }
+  const [a, b, c] = pts.length >= 3 ? solveLinear(ata, atb) : [Math.log(0.2), 1, 0];
+  const resid = new Map<string, { sum: number; n: number }>();
+  for (const p of pts) {
+    const x = feats(p);
+    const r = Math.log(p.mcap_usd!) - (a! + b! * x[1] + c! * x[2]);
+    if (p.category === null) continue;
+    const cell = resid.get(p.category) ?? { sum: 0, n: 0 };
+    cell.sum += r;
+    cell.n += 1;
+    resid.set(p.category, cell);
+  }
+  const eff = new Map<string, { x: number; n: number }>();
+  for (const [category, cell] of resid) eff.set(category, { x: cell.sum / (cell.n + REG.effect_k), n: cell.n });
+  return { a: a!, b: b!, c: c!, eff, n: pts.length };
+}
+
+/** The maturity adjustment, exactly as the board's model applies it. */
+function maturityOf(p: SnapshotProtocol, asOf: string, model: ModelConstants): { mult: number; age: number | null } {
+  const age = ageDays(asOf, p.listed_at);
+  const ageForModel = age ?? model.unknown_age_days;
+  return {
+    mult: model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range,
+    age,
+  };
+}
+
+/** Price one protocol under a regression fit: size term, category effect, fitted momentum, maturity. */
+function regressionPrice(fit: RegressionFit, p: SnapshotProtocol, asOf: string, model: ModelConstants): { implied: number } {
+  const { mult: maturityMult } = maturityOf(p, asOf, model);
+  const growthPct = Math.min(model.growth_cap, Math.max(model.growth_floor, finite(p.change_7d, 0)));
+  const growthMult = Math.min(REG.growth_cap_x, Math.max(REG.growth_floor_x, Math.exp(fit.c * (growthPct / 100))));
+  const cell = p.category !== null ? fit.eff.get(p.category) : undefined;
+  let ln = fit.a + fit.b * Math.log(p.tvl_usd) + (cell?.x ?? 0) + Math.log(growthMult);
+  ln = Math.min(Math.log(p.tvl_usd * REG.mult_cap), Math.max(Math.log(p.tvl_usd * REG.mult_floor), ln));
+  const priced = Math.exp(ln);
+  return { implied: Math.max(1, Math.round(priced * maturityMult)) };
+}
+
+/**
+ * The cross-check's leave-one-out score: every live-token protocol priced by a regression fit
+ * that never saw it, the median multiplicative miss stated exactly as computed. The regression
+ * is a second estimator built a different way from the board's category medians; it prices
+ * nothing on the board and exists so the proof panel can hold the two up side by side.
+ */
+export function crossCheckLoo(snapshot: Snapshot, model: ModelConstants = MODEL): CrossCheckSummary {
+  const live = snapshot.protocols
+    .filter((p) => !isPreToken(p) && p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0)
+    .sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+  if (live.length < 4) return { live_n: live.length, loo_median_error_x: 0 };
+  const abs: number[] = [];
+  for (let i = 0; i < live.length; i++) {
+    const fit = fitRegression(live.filter((_, j) => j !== i));
+    const p = live[i]!;
+    abs.push(Math.abs(Math.log(p.mcap_usd! / regressionPrice(fit, p, snapshot.as_of, model).implied)));
+  }
+  return { live_n: live.length, loo_median_error_x: round3(Math.exp(quantile(sortNums(abs), 0.5))) };
 }
 
 /* ---------- launch odds: the peers' record, read cross-sectionally ---------- */
@@ -941,6 +1112,107 @@ export function radarRow(row: BoardRow, watchlist: Set<string>): RadarRow {
   };
 }
 
+/* ---------- the ledger: every protocol in the snapshot, accounted for ---------- */
+
+/** The categories the house's watchlist rule treats as a wrapped, staked, bridged or exchange class. */
+const DERIVATIVE_CATEGORIES = new Set(['Bridge', 'Canonical Bridge', 'Liquid Staking', 'Liquid Restaking', 'Restaked BTC', 'CEX']);
+
+/** The exchange names the house's watchlist rule refuses at the head of a protocol's name. */
+const EXCHANGE_HEADS = ['Binance', 'Coinbase', 'Bybit', 'Kraken', 'Bitget', 'OKX', 'Bitfinex', 'Gemini'];
+
+/** A whole word in a name that marks a wrapped or staked product of another protocol. */
+const WRAPPED_WORD = /\b(wrapped|staked|staking)\b/i;
+
+/**
+ * The ledger: one line for every protocol in the snapshot, in slug order, each classified —
+ * it records a token, it is ranked on the board, or it is set aside with the reason stated,
+ * the reasons following the house's own watchlist rule as far as the snapshot's fields state
+ * it. Nothing in the snapshot is silently dropped: the classes sum to the snapshot's size,
+ * which verifyIntegrity recounts. A live-token line carries no implied value anywhere: the
+ * market prices it, the model never does, and the ranked board stays pre-token only.
+ */
+export function buildLedger(snapshot: Snapshot, board: BoardRow[]): LedgerEntry[] {
+  const ranked = new Map(board.map((r) => [r.slug, r]));
+  const watchlist = new Set(snapshot.watchlist);
+  return [...snapshot.protocols]
+    .sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0))
+    .map((p): LedgerEntry => {
+      const base = { slug: p.slug, name: p.name, category: p.category, tvl_usd: p.tvl_usd };
+      if (!isPreToken(p)) return { ...base, class: 'live-token', reason: 'records a token in the snapshot; priced by the market, never by the model' };
+      const row = ranked.get(p.slug);
+      if (row !== undefined) {
+        return {
+          ...base,
+          class: 'ranked',
+          reason: watchlist.has(p.slug) ? `on the house watchlist; ranked #${row.rank} on the board` : `early find below the floor; ranked #${row.rank} on the board`,
+        };
+      }
+      if (VERSIONED.test(p.name)) return { ...base, class: 'version-pool', reason: 'its name ends in a version marker: a pool of another protocol, not a launch of its own' };
+      if (p.category !== null && DERIVATIVE_CATEGORIES.has(p.category)) {
+        return { ...base, class: 'derivative-class', reason: `its category (${p.category}) is a wrapped, staked, bridged or exchange class: the asset of a token that already trades` };
+      }
+      if (WRAPPED_WORD.test(p.name)) return { ...base, class: 'derivative-name', reason: 'its name carries a wrapped or staked marker: the asset of a token that already trades' };
+      if (EXCHANGE_HEADS.some((head) => p.name === head || p.name.startsWith(`${head} `))) {
+        return { ...base, class: 'exchange-name', reason: 'its name begins with an exchange\u2019s name: an exchange product, not an independent launch candidate' };
+      }
+      if (p.tvl_usd >= snapshot.floor_usd) {
+        return { ...base, class: 'above-floor', reason: 'pre-token and above the floor, but outside the house watchlist; the board\u2019s above-floor rows are the watchlist itself' };
+      }
+      return { ...base, class: 'below-cut', reason: 'rankable and below the floor; its radar score fell below the board\u2019s early cut' };
+    });
+}
+
+/** The ledger's class counts, in the ledger's own class order. */
+const LEDGER_ORDER: LedgerClass[] = ['live-token', 'ranked', 'version-pool', 'derivative-class', 'derivative-name', 'exchange-name', 'above-floor', 'below-cut'];
+
+export function ledgerCounts(ledger: LedgerEntry[]): { class: LedgerClass; n: number }[] {
+  const counts = new Map<LedgerClass, number>();
+  for (const e of ledger) counts.set(e.class, (counts.get(e.class) ?? 0) + 1);
+  return LEDGER_ORDER.filter((c) => (counts.get(c) ?? 0) > 0).map((c) => ({ class: c, n: counts.get(c)! }));
+}
+
+/* ---------- integrity: the run re-derives its own headline figures ---------- */
+
+/**
+ * The integrity check the dashboard prints: the ledger is recounted against the snapshot
+ * (every protocol accounted for exactly once, every watchlist slug on the board), and every
+ * board row is repriced from the snapshot a second time — a fresh fit of the category
+ * multiples, the band and the odds recomputed — and compared field by field with the row
+ * the board carries. Any figure that disagrees is counted, never hidden.
+ */
+export function verifyIntegrity(snapshot: Snapshot, board: BoardRow[], validation: ModelValidation, odds: LaunchOdds, model: ModelConstants = MODEL): IntegritySummary {
+  const ledger = buildLedger(snapshot, board);
+  const accounted = new Set(ledger.map((e) => e.slug));
+  const pricing = categoryMultiples(snapshot, model);
+  const index = bySlug(snapshot.protocols);
+  const boardSlugs = new Set(board.map((r) => r.slug));
+  let mismatches = 0;
+  let recomputed = 0;
+  for (const row of board) {
+    const p = index.get(row.slug);
+    if (p === undefined) { mismatches += 1; continue; }
+    const iv = impliedValue(p, snapshot.as_of, model, pricing);
+    const band = validation.bandFor(p.category);
+    const low = Math.max(1, Math.round(iv.implied * band.lo));
+    const high = Math.max(low, Math.round(iv.implied * band.hi));
+    const o = odds.oddsFor(p);
+    recomputed += 1;
+    if (
+      iv.implied !== row.implied_value_usd || low !== row.implied_low_usd || high !== row.implied_high_usd ||
+      o !== row.launch_odds || Math.max(1, Math.round(iv.implied * o)) !== row.expected_value_usd
+    ) mismatches += 1;
+  }
+  return {
+    protocols_total: snapshot.protocols.length,
+    protocols_accounted: snapshot.protocols.filter((p) => accounted.has(p.slug)).length,
+    watchlist_total: snapshot.watchlist.length,
+    watchlist_covered: snapshot.watchlist.filter((s) => boardSlugs.has(s)).length,
+    board_rows: board.length,
+    rows_recomputed: recomputed,
+    mismatches,
+  };
+}
+
 /** Everything the dashboard renders, from the snapshot. */
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
   const validation = validateModel(snapshot, model);
@@ -954,6 +1226,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     .map(([category, v]) => ({ category, multiple: round4(v.multiple), comparables: v.comparables }))
     .sort((a, b) => b.comparables - a.comparables || (a.category < b.category ? -1 : 1))
     .slice(0, 14);
+  const ledger = buildLedger(snapshot, board);
   const radar: RadarData = {
     as_of: snapshot.as_of,
     source: snapshot.source,
@@ -961,6 +1234,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     model,
     model_version: MODEL_VERSION,
     validation: validation.summary,
+    crosscheck: crossCheckLoo(snapshot, model),
     odds: odds.summary,
     farm_capture: FARM_CAPTURE,
     global_multiple: round4(pricing.global),
@@ -969,6 +1243,9 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     board_size: board.length,
     early_size: early,
     live_size: live.length,
+    ledger,
+    ledger_counts: ledgerCounts(ledger),
+    integrity: verifyIntegrity(snapshot, board, validation, odds, model),
     rows: board.map((r) => radarRow(r, watchlist)),
     live,
   };
