@@ -1,9 +1,11 @@
 // A working token-radar-01 entry (Node 22, standard library only).
 //
 // The program reads the sealed snapshot from /input/snapshot.json (or --input <file|dir>), scores every
-// pre-token protocol with the model in lib/model.ts (radar-2: each category priced at the market's own
+// pre-token protocol with the model in lib/model.ts (radar-3: each category priced at the market's own
 // median mcap/TVL for that category, shrunk toward the market-wide median, then adjusted for seven-day
-// growth and maturity), writes the ranked board to /output/board.json, and copies this repository's
+// growth and maturity — and the fitted multiples validated on the snapshot's own live-token protocols
+// by leave-one-out, split-half and walk-forward tests, whose residuals set each row's 80% range),
+// writes the ranked board to /output/board.json, and copies this repository's
 // dashboard/ and screenshots/ to /output. Last, it writes /output/dossier.json, the summary the judge
 // reads, with the vendored make.fun library.
 //

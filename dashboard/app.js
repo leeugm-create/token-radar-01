@@ -40,6 +40,8 @@
     return Math.round(days) + ' days';
   }
   function fmtMult(x) { return '×' + Number(x).toFixed(3); }
+  function fmtX(x) { return '×' + Number(x).toFixed(2); }
+  function fmtShare(x) { return Math.round(Number(x) * 100) + '%'; }
 
   /* ---------- shared chrome ---------- */
   function masthead() {
@@ -72,6 +74,25 @@
       'token then adjust the price; nothing else enters, and no protocol is named or special-cased.</p>' +
       '<span class="formula">implied = TVL \u00d7 category multiple \u00d7 (1 + clamped 7d change \u00d7 0.45) \u00d7 (0.65 + 0.35 \u00d7 age/3y)</span>' +
       '<div class="mults">' + chips + '</div></section>';
+  }
+  function validationPanel() {
+    var v = DATA.validation;
+    if (!v) return '';
+    return '<section class="model valid"><h2>Checked against the market, not just asserted</h2>' +
+      '<p>The multiples are the only fitted part of this model, so they were tested on the snapshot\u2019s own ' +
+      '<b>' + v.live_n + ' live-token protocols</b> — the ones whose market caps are known — before being trusted ' +
+      'with the board. Three tests, all deterministic: <b>leave-one-out</b> (each live protocol priced by a market ' +
+      'fitted without it), a <b>split-half</b> dealt by slug hash, and a <b>walk-forward</b> fitted on the ' +
+      v.wf_train_n + ' protocols listed by ' + esc(v.wf_cutoff) + ' and tested on the ' + v.wf_test_n +
+      ' listed after. The misses are wide and are stated as computed: pricing a future token from TVL is a ' +
+      'factor-of-several game, which is why every row carries the 80% range its category\u2019s held-out residuals draw ' +
+      '(market-wide: ' + fmtX(v.band_low_x) + ' to ' + fmtX(v.band_high_x) + ' of the point estimate).</p>' +
+      '<div class="mults">' +
+      '<span>leave-one-out median miss <b>' + fmtX(v.loo_median_error_x) + '</b></span>' +
+      '<span>split-half median miss <b>' + fmtX(v.split_median_error_x) + '</b></span>' +
+      '<span>walk-forward median miss <b>' + fmtX(v.wf_median_error_x) + '</b></span>' +
+      '<span>80% range held <b>' + fmtShare(v.wf_coverage80) + '</b> walk-forward</span>' +
+      '<span><b>' + fmtShare(v.loo_coverage80) + '</b> leave-one-out</span></div></section>';
   }
 
   /* ---------- board view ---------- */
@@ -159,7 +180,7 @@
             '<td class="chains">' + esc(r.chains.slice(0, 3).join(', ')) + (r.chains.length > 3 ? ' +' + (r.chains.length - 3) : '') + '</td></tr>';
         }).join('') + '</tbody></table>';
     }
-    app.innerHTML = masthead() + modelPanel() + controls() + '<div id="list">' + body + '</div>' + footer();
+    app.innerHTML = masthead() + modelPanel() + validationPanel() + controls() + '<div id="list">' + body + '</div>' + footer();
     wireControls();
     var c = document.getElementById('count');
     if (c) c.textContent = list.length + ' shown';
@@ -178,7 +199,7 @@
           '<td class="num">' + fmtPct(r.change_7d) + '</td>' +
           '<td class="chains">' + esc(r.chains.slice(0, 3).join(', ')) + '</td></tr>';
       }).join('') + '</tbody></table>';
-    app.innerHTML = masthead() + modelPanel() + controls() + body + footer();
+    app.innerHTML = masthead() + modelPanel() + validationPanel() + controls() + body + footer();
     wireControls();
     var c = document.getElementById('count');
     if (c) c.textContent = DATA.live.length + ' live shown';
@@ -194,7 +215,8 @@
       '<tr><td>Category multiple (' + esc(r.category || 'uncategorised') + ', median of ' + r.comparables + ' live comparable' + (r.comparables === 1 ? '' : 's') + ', shrunk)</td><td>' + fmtMult(r.base_multiple) + '</td></tr>' +
       '<tr><td>Growth multiplier (7d change ' + (r.change_7d === null ? 'unreported, taken as 0' : r.change_7d.toFixed(2) + '%') + ', clamped)</td><td>' + fmtMult(r.growth_multiplier) + '</td></tr>' +
       '<tr><td>Maturity multiplier (age ' + fmtAge(r.age_days) + ' with no token)</td><td>' + fmtMult(r.maturity_multiplier) + '</td></tr>' +
-      '<tr class="total"><td>Implied token value</td><td>' + fmtFull(r.implied_value_usd) + '</td></tr></tbody></table>';
+      '<tr class="total"><td>Implied token value</td><td>' + fmtFull(r.implied_value_usd) + '</td></tr>' +
+      '<tr><td>80% held-out range (where comparable launches actually landed)</td><td>' + fmtFull(r.implied_low_usd) + ' \u2013 ' + fmtFull(r.implied_high_usd) + '</td></tr></tbody></table>';
     var plan = '<ol class="plan">' + r.farm_steps.map(function (s) { return '<li>' + esc(s) + '</li>'; }).join('') + '</ol>';
     app.innerHTML = masthead() +
       '<div class="detail"><button class="back" id="back">\u2190 Back to the board</button>' +
@@ -203,7 +225,7 @@
       ' · records no token in the snapshot · first tracked ' + esc(r.listed_at || 'on an unknown date') + '</p>' +
       '<div class="cards">' +
       '<div class="card"><div class="k">Board rank</div><div class="v">#' + r.rank + '</div><div class="s">of ' + rows.length + ' pre-token protocols</div></div>' +
-      '<div class="card"><div class="k">Implied value</div><div class="v">' + fmtUsd(r.implied_value_usd) + '</div><div class="s">' + fmtFull(r.implied_value_usd) + '</div></div>' +
+      '<div class="card"><div class="k">Implied value</div><div class="v">' + fmtUsd(r.implied_value_usd) + '</div><div class="s">' + fmtFull(r.implied_value_usd) + ' · 80% range ' + fmtUsd(r.implied_low_usd) + '\u2013' + fmtUsd(r.implied_high_usd) + '</div></div>' +
       '<div class="card"><div class="k">TVL</div><div class="v">' + fmtUsd(r.tvl_usd) + '</div><div class="s">7d change ' + (r.change_7d === null ? 'n/a' : r.change_7d.toFixed(2) + '%') + '</div></div>' +
       '<div class="card"><div class="k">Age with no token</div><div class="v">' + fmtAge(r.age_days) + '</div><div class="s">since ' + esc(r.listed_at || 'unknown') + '</div></div>' +
       '</div>' +

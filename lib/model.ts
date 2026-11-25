@@ -18,6 +18,14 @@
 // Every input is a figure the snapshot itself carries: no protocol name is ever special-cased, and
 // the same function scores every row. The early set below the floor is chosen by a radar score that
 // mixes size, momentum, reach and priceability (see earlyScore), never by TVL alone.
+//
+// The multiples are the only fitted part of the model, and they are not trusted on assertion:
+// validateModel tests them on the snapshot's own live-token protocols three ways — leave-one-out,
+// a split-half dealt by slug hash, and a walk-forward that fits on the earlier-listed protocols and
+// is tested on the later-listed ones. The residuals of those tests draw the 80% range every board
+// row carries (implied_low_usd .. implied_high_usd), and the dashboard's validation panel states
+// the errors and the band's held-out coverage exactly as computed. The growth and maturity terms
+// are fixed constants of the model, applied identically in every test and every row.
 
 /** The snapshot's protocol entry: exactly the ten fields the sealed input carries. */
 export interface SnapshotProtocol {
@@ -70,7 +78,7 @@ export const MODEL: ModelConstants = {
 };
 
 /** The model's version label: the dashboard names it and the rules quote it. */
-export const MODEL_VERSION = 'radar-2';
+export const MODEL_VERSION = 'radar-3';
 
 /** How many early protocols below the floor the board carries, chosen by radar score. */
 export const EARLY_ROWS = 176;
@@ -101,6 +109,8 @@ export interface BoardRow {
   token_status: 'pre-token';
   age_days: number | null;
   implied_value_usd: number;
+  implied_low_usd: number;
+  implied_high_usd: number;
   model: {
     base_multiple: number;
     comparables: number;
@@ -125,6 +135,8 @@ export interface RadarRow {
   listed_at: string | null;
   age_days: number | null;
   implied_value_usd: number;
+  implied_low_usd: number;
+  implied_high_usd: number;
   base_multiple: number;
   comparables: number;
   growth_multiplier: number;
@@ -152,6 +164,27 @@ export interface CategoryMultiple {
   comparables: number;
 }
 
+/**
+ * How the fitted multiples fared when tested on the snapshot's own live-token protocols.
+ * Errors are median multiplicative misses (x2.0 means the typical prediction is off by a factor
+ * of two, in either direction); coverages are shares of held-out actual market caps that fell
+ * inside the model's 80% range.
+ */
+export interface ValidationSummary {
+  live_n: number;
+  loo_median_error_x: number;
+  split_median_error_x: number;
+  wf_cutoff: string;
+  wf_train_n: number;
+  wf_test_n: number;
+  wf_median_error_x: number;
+  band_low_x: number;
+  band_high_x: number;
+  loo_coverage80: number;
+  wf_coverage80: number;
+  band_min_n: number;
+}
+
 /** Everything the dashboard needs: the board, the live set, and the model it runs. */
 export interface RadarData {
   as_of: string;
@@ -159,6 +192,7 @@ export interface RadarData {
   floor_usd: number;
   model: ModelConstants;
   model_version: string;
+  validation: ValidationSummary;
   global_multiple: number;
   multiples: CategoryMultiple[];
   watchlist_size: number;
@@ -223,14 +257,15 @@ export interface CategoryPricing {
 }
 
 /**
- * The market's own multiples, from the snapshot's live-token protocols: each category's median
- * mcap/TVL, shrunk toward the market-wide median in proportion to its sample, then clamped.
- * A category the market has never priced falls back to the market-wide median itself.
+ * The market's own multiples, fitted on an arbitrary set of protocols (the whole snapshot for the
+ * board, a training subset for validation): each category's median mcap/TVL among the set's
+ * live-token protocols, shrunk toward the set's market-wide median in proportion to its sample,
+ * then clamped. A category the set has never priced falls back to the market-wide median itself.
  */
-export function categoryMultiples(snapshot: Snapshot, model: ModelConstants = MODEL): { byCategory: Map<string, CategoryPricing>; global: number } {
+export function fitPricing(protocols: SnapshotProtocol[], model: ModelConstants = MODEL): { byCategory: Map<string, CategoryPricing>; global: number } {
   const ratios = new Map<string, number[]>();
   const all: number[] = [];
-  for (const p of snapshot.protocols) {
+  for (const p of protocols) {
     if (isPreToken(p) || p.mcap_usd === null || p.mcap_usd <= 0 || p.tvl_usd <= 0) continue;
     const ratio = p.mcap_usd / p.tvl_usd;
     all.push(ratio);
@@ -251,6 +286,11 @@ export function categoryMultiples(snapshot: Snapshot, model: ModelConstants = MO
     });
   }
   return { byCategory, global };
+}
+
+/** The board's pricing: the market's multiples fitted on the whole snapshot. */
+export function categoryMultiples(snapshot: Snapshot, model: ModelConstants = MODEL): { byCategory: Map<string, CategoryPricing>; global: number } {
+  return fitPricing(snapshot.protocols, model);
 }
 
 /** The pricing one protocol's category gets: its own category's, or the market-wide fallback. */
@@ -277,6 +317,136 @@ export function impliedValue(
   const maturityMult = model.maturity_floor + (Math.min(Math.max(ageForModel, 0), model.maturity_days) / model.maturity_days) * model.maturity_range;
   const implied = Math.max(1, Math.round(protocol.tvl_usd * multiple * growthMult * maturityMult));
   return { implied, baseMultiple: multiple, comparables, growthPct, growthMult, maturityMult, age };
+}
+
+/* ---------- validation: the fitted multiples, tested on the market's own record ---------- */
+
+/** How few residuals a category needs before its own band replaces the market-wide one. */
+const BAND_MIN_N = 8;
+
+const round3 = (n: number): number => Math.round(n * 1000) / 1000;
+
+const sortNums = (xs: number[]): number[] => [...xs].sort((a, b) => a - b);
+
+/** The q-quantile of a sorted array, linear between its neighbours; NaN when it holds nothing. */
+function quantile(sorted: number[], q: number): number {
+  if (sorted.length === 0) return NaN;
+  const pos = q * (sorted.length - 1);
+  const lo = Math.floor(pos);
+  const hi = Math.ceil(pos);
+  return lo === hi ? sorted[lo]! : sorted[lo]! + (sorted[hi]! - sorted[lo]!) * (pos - lo);
+}
+
+/** FNV-1a over the slug: a stable coin flip that deals each protocol to a validation half. */
+function slugHash(slug: string): number {
+  let h = 0x811c9dc5;
+  for (let i = 0; i < slug.length; i++) {
+    h ^= slug.charCodeAt(i);
+    h = Math.imul(h, 0x01000193);
+  }
+  return h >>> 0;
+}
+
+/** A validation result: the summary the dashboard states, and the band each category's rows carry. */
+export interface ModelValidation {
+  summary: ValidationSummary;
+  bandFor: (category: string | null) => { lo: number; hi: number };
+}
+
+/**
+ * The model, tested on the only ground truth the snapshot holds: its live-token protocols, whose
+ * market caps are known. The fitted multiples are re-fitted on training subsets and asked to price
+ * protocols they never saw, three ways — leave-one-out over the whole live set, a split-half dealt
+ * by slug hash (each half prices the other), and a walk-forward that fits on the 60% listed
+ * earliest and is tested on the 40% listed latest. Residuals are ln(actual / predicted); the 80%
+ * range is the 10th–90th percentile of the leave-one-out residuals, per category where at least
+ * BAND_MIN_N residuals stand behind it, else market-wide. The walk-forward's coverage is measured
+ * with a band calibrated inside its training years only, so that number is honestly held out.
+ * Every split is a function of the snapshot's own fields: no randomness, same bytes every run.
+ */
+export function validateModel(snapshot: Snapshot, model: ModelConstants = MODEL): ModelValidation {
+  const asOf = snapshot.as_of;
+  const live = snapshot.protocols
+    .filter((p) => !isPreToken(p) && p.mcap_usd !== null && p.mcap_usd > 0 && p.tvl_usd > 0)
+    .sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
+  const residOn = (fit: SnapshotProtocol[], test: SnapshotProtocol[]): { p: SnapshotProtocol; r: number }[] => {
+    const pricing = fitPricing(fit, model);
+    return test.map((p) => ({ p, r: Math.log(p.mcap_usd! / impliedValue(p, asOf, model, pricing).implied) }));
+  };
+  const medErr = (xs: { r: number }[]): number => Math.exp(quantile(sortNums(xs.map((x) => Math.abs(x.r))), 0.5));
+  const inBand = (xs: { r: number }[], lo: number, hi: number): number =>
+    xs.length === 0 ? 0 : xs.filter((x) => x.r >= Math.log(lo) && x.r <= Math.log(hi)).length / xs.length;
+
+  if (live.length < 4) {
+    return {
+      summary: {
+        live_n: live.length, loo_median_error_x: 0, split_median_error_x: 0, wf_cutoff: '',
+        wf_train_n: 0, wf_test_n: 0, wf_median_error_x: 0, band_low_x: 1, band_high_x: 1,
+        loo_coverage80: 0, wf_coverage80: 0, band_min_n: BAND_MIN_N,
+      },
+      bandFor: () => ({ lo: 1, hi: 1 }),
+    };
+  }
+
+  // Leave-one-out: every live protocol priced by a market fitted without it.
+  const loo: { p: SnapshotProtocol; r: number }[] = [];
+  for (let i = 0; i < live.length; i++) loo.push(...residOn(live.filter((_, j) => j !== i), [live[i]!]));
+  // Split-half: the slug hash deals the live set in two; each half prices the other.
+  const halfA = live.filter((p) => slugHash(p.slug) % 2 === 0);
+  const halfB = live.filter((p) => slugHash(p.slug) % 2 === 1);
+  const split = [...residOn(halfA, halfB), ...residOn(halfB, halfA)];
+  // Walk-forward: fit on the earlier-listed 60%, test on the later-listed 40%.
+  const dated = live
+    .filter((p) => p.listed_at !== null)
+    .sort((a, b) => (a.listed_at! < b.listed_at! ? -1 : a.listed_at! > b.listed_at! ? 1 : a.slug < b.slug ? -1 : 1));
+  const train = dated.slice(0, Math.floor(dated.length * 0.6));
+  const test = dated.slice(train.length);
+  const wf = residOn(train, test);
+  // The walk-forward's band is calibrated by a split-half inside the training years alone.
+  const trA = train.filter((p) => slugHash(p.slug) % 2 === 0);
+  const trB = train.filter((p) => slugHash(p.slug) % 2 === 1);
+  const trResid = sortNums([...residOn(trA, trB), ...residOn(trB, trA)].map((x) => x.r));
+  const wfLo = Math.exp(quantile(trResid, 0.1));
+  const wfHi = Math.exp(quantile(trResid, 0.9));
+
+  const looResid = sortNums(loo.map((x) => x.r));
+  const bandLo = Math.exp(quantile(looResid, 0.1));
+  const bandHi = Math.exp(quantile(looResid, 0.9));
+  const byCat = new Map<string, number[]>();
+  for (const x of loo) {
+    if (x.p.category === null) continue;
+    const list = byCat.get(x.p.category);
+    if (list === undefined) byCat.set(x.p.category, [x.r]);
+    else list.push(x.r);
+  }
+  const catBand = new Map<string, { lo: number; hi: number }>();
+  for (const [category, rs] of byCat) {
+    if (rs.length < BAND_MIN_N) continue;
+    const s = sortNums(rs);
+    catBand.set(category, { lo: Math.exp(quantile(s, 0.1)), hi: Math.exp(quantile(s, 0.9)) });
+  }
+
+  return {
+    summary: {
+      live_n: live.length,
+      loo_median_error_x: round3(medErr(loo)),
+      split_median_error_x: round3(medErr(split)),
+      wf_cutoff: train.length > 0 ? train[train.length - 1]!.listed_at! : '',
+      wf_train_n: train.length,
+      wf_test_n: test.length,
+      wf_median_error_x: round3(medErr(wf)),
+      band_low_x: round3(bandLo),
+      band_high_x: round3(bandHi),
+      loo_coverage80: round3(inBand(loo, bandLo, bandHi)),
+      wf_coverage80: round3(inBand(wf, wfLo, wfHi)),
+      band_min_n: BAND_MIN_N,
+    },
+    bandFor: (category) => {
+      const raw = (category !== null ? catBand.get(category) : undefined) ?? { lo: bandLo, hi: bandHi };
+      // A row's range always contains its own point estimate; the coverage figures above are not clamped.
+      return { lo: Math.min(raw.lo, 1), hi: Math.max(raw.hi, 1) };
+    },
+  };
 }
 
 /**
@@ -308,7 +478,7 @@ export interface BoardSummary {
 }
 
 /** The protocols the board ranks, strongest first, with ranks 1..n. */
-export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): BoardRow[] {
+export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL, validation: ModelValidation = validateModel(snapshot, model)): BoardRow[] {
   const pricing = categoryMultiples(snapshot, model);
   const index = bySlug(snapshot.protocols);
   const chosen = new Map<string, SnapshotProtocol>();
@@ -327,7 +497,11 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
 
   const scored = [...chosen.values()].map((p) => ({ p, ...impliedValue(p, snapshot.as_of, model, pricing) }));
   scored.sort((a, b) => b.implied - a.implied || b.p.tvl_usd - a.p.tvl_usd || (a.p.slug < b.p.slug ? -1 : a.p.slug > b.p.slug ? 1 : 0));
-  return scored.map((s, i) => ({
+  return scored.map((s, i) => {
+    const band = validation.bandFor(s.p.category);
+    const low = Math.max(1, Math.round(s.implied * band.lo));
+    const high = Math.max(low, Math.round(s.implied * band.hi));
+    return {
     rank: i + 1,
     slug: s.p.slug,
     name: s.p.name,
@@ -342,6 +516,8 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
     token_status: 'pre-token',
     age_days: s.age,
     implied_value_usd: s.implied,
+    implied_low_usd: low,
+    implied_high_usd: high,
     model: {
       base_multiple: round4(s.baseMultiple),
       comparables: s.comparables,
@@ -351,7 +527,8 @@ export function buildBoard(snapshot: Snapshot, model: ModelConstants = MODEL): B
       age_days: s.age,
     },
     farm_steps: farmSteps(s.p, s.age).map(stepText),
-  }));
+    };
+  });
 }
 
 /** A step as one string: its action, then its cost and time, within the gate's 20..600 characters. */
@@ -547,6 +724,8 @@ export function radarRow(row: BoardRow, watchlist: Set<string>): RadarRow {
     listed_at: row.listed_at,
     age_days: row.age_days,
     implied_value_usd: row.implied_value_usd,
+    implied_low_usd: row.implied_low_usd,
+    implied_high_usd: row.implied_high_usd,
     base_multiple: row.model.base_multiple,
     comparables: row.model.comparables,
     growth_multiplier: row.model.growth_multiplier,
@@ -558,7 +737,8 @@ export function radarRow(row: BoardRow, watchlist: Set<string>): RadarRow {
 
 /** Everything the dashboard renders, from the snapshot. */
 export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): { board: BoardRow[]; radar: RadarData } {
-  const board = buildBoard(snapshot, model);
+  const validation = validateModel(snapshot, model);
+  const board = buildBoard(snapshot, model, validation);
   const live = liveRows(snapshot);
   const pricing = categoryMultiples(snapshot, model);
   const watchlist = new Set(snapshot.watchlist);
@@ -573,6 +753,7 @@ export function buildRadar(snapshot: Snapshot, model: ModelConstants = MODEL): {
     floor_usd: snapshot.floor_usd,
     model,
     model_version: MODEL_VERSION,
+    validation: validation.summary,
     global_multiple: round4(pricing.global),
     multiples,
     watchlist_size: snapshot.watchlist.length,

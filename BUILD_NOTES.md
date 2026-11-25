@@ -124,3 +124,26 @@ rows must come from outside the watchlist.
   board.json 216 rows / 400,663 B; dossier.json 1,068,385 B (≤ 1.5 MiB); no `http://` or `https://`
   anywhere under `dashboard/`; `main.ts`'s own `boardIssue` gate passes (it exits non-zero otherwise);
   farm steps 3–12 per row within 20–600 chars (actual: 7 per row, 146–266 chars).
+
+## Phase 3 — variant A (radar-3): validated multiples, 80% ranges
+
+- **Validation harness** (`validateModel` in `lib/model.ts`): the category multiples are the only
+  fitted part of the model, so they are re-fitted on training subsets and tested on the snapshot's
+  own 128 live-token protocols (market cap and TVL both known), three deterministic ways —
+  leave-one-out over the whole live set; a split-half dealt by FNV-1a slug hash (each half prices
+  the other); and a walk-forward fitting on the 57 protocols listed by 2024-07-25 and testing on
+  the 38 listed after. Residuals are ln(actual / predicted); errors are median multiplicative
+  misses. Computed on this snapshot: **LOO ×5.17, split-half ×4.84, walk-forward ×5.40** — wide,
+  and stated on the page exactly as computed.
+- **80% ranges**: every board row now carries `implied_low_usd` / `implied_high_usd` from the
+  10th–90th percentiles of the leave-one-out residuals — per category where ≥8 residuals stand
+  behind it, else the market-wide band (×0.085 – ×15.30). A row's range always contains its point
+  estimate (the coverage figures are computed unclamped). Held-out honesty check: the walk-forward
+  band, calibrated by a split-half inside the training years alone, contained **76%** of the
+  later-listed protocols' actual market caps (LOO coverage 80%, by construction).
+- **Dashboard**: a "Checked against the market, not just asserted" panel under the model panel
+  states the method and the computed numbers; the detail view shows the range in the implied-value
+  card and as a breakdown row. Source 587 + 7,882 + 19,357 = 27,826 B, still fully offline.
+- **Verification**: two runs byte-identical; board.json 412,231 B, dossier.json 1,070,501 B;
+  screenshots re-shot (board 286 KiB, detail 228 KiB, filtered 275 KiB, all 1440×1100) and
+  visually inspected — the panel and the range render with the real figures.
